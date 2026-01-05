@@ -144,144 +144,107 @@
     <p>Refresh the page or try again later.</p>
   </div>
 
-  <script>
-    const tg = window.Telegram.WebApp;
-    tg.ready();
-    tg.expand();
+ <script>
+  const tg = window.Telegram.WebApp;
+  tg.ready();
+  tg.expand();
 
-    const PAYMENT_WALLET = "B4427oKJc3xnQf91kwXHX27u1SsVyB8GDQtc3NBxRtkK";
-    document.getElementById('wallet').textContent = PAYMENT_WALLET;
+  const PAYMENT_WALLET = "B4427oKJc3xnQf91kwXHX27u1SsVyB8GDQtc3NBxRtkK";
+  document.getElementById('wallet').textContent = PAYMENT_WALLET;
 
-    let selected = null;
-    let intervalId = null;
-    let timeoutId = null;
-    let startTime = null;
+  let selected = null;
+  let intervalId = null;
+  let timeoutId = null;
+  let startTime = null;
 
-    async function pick(pay, balance, target, bounty) {
-      selected = { pay, balance, target, bounty };
+  async function pick(pay, balance, target, bounty) {
+    selected = { pay, balance, target, bounty };
 
-      document.getElementById('amount').textContent = '$' + pay;
-      document.getElementById('bal').textContent = balance;
+    document.getElementById('amount').textContent = '$' + pay;
+    document.getElementById('bal').textContent = balance;
 
-      document.getElementById('tiers').style.display = 'none';
-      document.getElementById('payment').style.display = 'block';
+    document.getElementById('tiers').style.display = 'none';
+    document.getElementById('payment').style.display = 'block';
 
-      // Proper Solana Pay URL with amount, label, and message
-      const solanaPayUrl = `solana:${PAYMENT_WALLET}?amount=${pay}&label=Crucible%20PROP&message=Purchase%20%24${pay}%20Challenge`;
-      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=230x230&data=${encodeURIComponent(solanaPayUrl)}`;
+    // Solana Pay URL with fixed USD amount (original simple version)
+    const solanaPayUrl = `solana:${PAYMENT_WALLET}?amount=${pay}&label=Crucible%20PROP&message=Purchase%20%24${pay}%20Challenge`;
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=230x230&data=${encodeURIComponent(solanaPayUrl)}`;
 
-      const img = new Image();
-      img.src = qrUrl;
-      img.onload = () => {
-        document.getElementById('qr').innerHTML = '';
-        document.getElementById('qr').appendChild(img);
-      };
+    const img = new Image();
+    img.src = qrUrl;
+    img.onload = () => {
+      document.getElementById('qr').innerHTML = '';
+      document.getElementById('qr').appendChild(img);
+    };
 
-      // Start timer and polling
-      startTime = Date.now();
-      updateTimer();
+    // Start timer
+    startTime = Date.now();
+    updateTimer();
 
-      // Tell backend we're expecting this payment
-      await fetch('https://prop-degen-11.onrender.com', {
+    // Notify backend
+    await fetch('https://prop-degen-11.onrender.com', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: tg.initDataUnsafe.user?.id,
+        payAmount: pay
+      })
+    }).catch(() => {});
+
+    // Poll for payment
+    intervalId = setInterval(checkPayment, 4000);
+
+    // 15-minute timeout
+    timeoutId = setTimeout(() => {
+      clearInterval(intervalId);
+      document.getElementById('payment').style.display = 'none';
+      document.getElementById('timeout').style.display = 'block';
+    }, 15 * 60 * 1000);
+  }
+
+  function updateTimer() {
+    if (!startTime) return;
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const remaining = Math.max(0, 900 - elapsed);
+    const mins = String(Math.floor(remaining / 60)).padStart(2, '0');
+    const secs = String(remaining % 60).padStart(2, '0');
+    document.getElementById('timer').textContent = `Time remaining: ${mins}:${secs}`;
+
+    if (remaining > 0) {
+      requestAnimationFrame(updateTimer);
+    } else {
+      document.getElementById('timer').textContent = 'Time remaining: 00:00';
+    }
+  }
+
+  async function checkPayment() {
+    if (!selected || !tg.initDataUnsafe?.user) return;
+
+    try {
+      const res = await fetch('https://prop-degen-11.onrender.com', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: tg.initDataUnsafe.user.id,
-          payAmount: pay
+          payAmount: selected.pay
         })
-      }).catch(() => {});
+      });
 
-      // Poll for confirmation every 4 seconds
-      intervalId = setInterval(checkPayment, 4000);
+      const data = await res.json();
 
-      // 15-minute timeout
-      timeoutId = setTimeout(() => {
+      if (data.ok) {
         clearInterval(intervalId);
+        clearTimeout(timeoutId);
+
         document.getElementById('payment').style.display = 'none';
-        document.getElementById('timeout').style.display = 'block';
-      }, 15 * 60 * 1000);
+        document.getElementById('success').style.display = 'block';
+
+        setTimeout(() => tg.close(), 8000);
+      }
+    } catch (e) {
+      console.error('Polling error:', e);
     }
-
-    async function pick(payUSD, balance, target, bounty) {
-  selected = { payUSD, balance, target, bounty };
-
-  document.getElementById('amount').textContent = '$' + payUSD;
-  document.getElementById('bal').textContent = balance;
-
-  document.getElementById('tiers').style.display = 'none';
-  document.getElementById('payment').style.display = 'block';
-
-  // === FETCH CURRENT SOL PRICE AUTOMATICALLY ===
-  let solPrice = 134; // fallback
-  try {
-    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
-    const data = await res.json();
-    solPrice = data.solana.usd || solPrice;
-  } catch (e) {
-    console.error('Price fetch failed, using fallback');
   }
-
-  // Calculate exact SOL amount needed (with small buffer for fees)
-  const solAmount = (payUSD / solPrice * 1.005).toFixed(6); // +0.5% buffer
-
-  // Show SOL amount to user
-  document.getElementById('timer').insertAdjacentHTML('beforebegin', 
-    `<p style="margin:16px 0; font-size:18px; color:#cf1020;">≈ ${solAmount} SOL (at current price)</p>`
-  );
-
-  // Proper Solana Pay QR with dynamic amount
-  const solanaPayUrl = `solana:${PAYMENT_WALLET}?amount=${solAmount}&label=Crucible%20PROP&message=$${payUSD}%20Challenge`;
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=230x230&data=${encodeURIComponent(solanaPayUrl)}`;
-
-  const img = new Image();
-  img.src = qrUrl;
-  img.onload = () => {
-    document.getElementById('qr').innerHTML = '';
-    document.getElementById('qr').appendChild(img);
-  };
-
-    function updateTimer() {
-      if (!startTime) return;
-      const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      const remaining = Math.max(0, 900 - elapsed);
-      const mins = String(Math.floor(remaining / 60)).padStart(2, '0');
-      const secs = String(remaining % 60).padStart(2, '0');
-      document.getElementById('timer').textContent = `Time remaining: ${mins}:${secs}`;
-
-      if (remaining > 0) {
-        requestAnimationFrame(updateTimer);
-      }
-    }
-
-    async function checkPayment() {
-      if (!selected || !tg.initDataUnsafe?.user) return;
-
-      try {
-        const res = await fetch('https://prop-degen-11.onrender.com', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId: tg.initDataUnsafe.user.id,
-            payAmount: selected.pay
-          })
-        });
-
-        const data = await res.json();
-
-        if (data.ok) {
-          clearInterval(intervalId);
-          clearTimeout(timeoutId);
-
-          document.getElementById('payment').style.display = 'none';
-          document.getElementById('success').style.display = 'block';
-
-          // Auto-close after 8 seconds
-          setTimeout(() => tg.close(), 8000);
-        }
-      } catch (e) {
-        console.error('Polling error:', e);
-      }
-    }
-  </script>
+</script>
 </body>
 </html>
